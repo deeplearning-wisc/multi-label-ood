@@ -273,6 +273,7 @@ if __name__ == '__main__':
         model = nn.Sequential(*features, nn.ReLU(inplace=True))
         clsfier = clssimp(1024, args.n_classes)
 
+
     if torch.cuda.device_count() > 1:
         model = nn.DataParallel(model).cuda()
         clsfier = nn.DataParallel(clsfier).cuda()
