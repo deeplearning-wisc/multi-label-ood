@@ -1,46 +1,38 @@
-import sys
+import os
 import torch
 import argparse
-import numpy as np
+import torchvision
 import torch.nn as nn
-import validate
-import torch.nn.functional as F
-
 from torch.autograd import Variable
 from torch.utils import data
-from PIL import Image
+
+import validate
 from utils.dataloader.pascal_voc_loader import *
 from utils.dataloader.nus_wide_loader import *
 from utils.dataloader.coco_loader import *
-import random
-
-import torchvision.transforms as transforms
-#---- your own transformations
-from utils.transform import ReLabel, ToLabel, ToSP, Scale
-
+from utils.anom_utils import ToLabel
 from model.classifiersimple import *
-import torchvision
 
-def train(args):
+def train():
     args.save_dir += args.dataset + '/'
     if not os.path.exists(args.save_dir):
         os.makedirs(args.save_dir)
 
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+    normalize = torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
-    img_transform = transforms.Compose([
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomResizedCrop((256),scale=(0.5, 2.0)),
-            transforms.ToTensor(),
+    img_transform = torchvision.transforms.Compose([
+            torchvision.transforms.RandomHorizontalFlip(),
+            torchvision.transforms.RandomResizedCrop((256, 256), scale=(0.5, 2.0)),
+            torchvision.transforms.ToTensor(),
             normalize,
         ])
 
-    label_transform = transforms.Compose([
+    label_transform = torchvision.transforms.Compose([
             ToLabel(),
         ])
-    val_transform = transforms.Compose([
-        transforms.Resize((256, 256)),
-        transforms.ToTensor(),
+    val_transform = torchvision.transforms.Compose([
+        torchvision.transforms.Resize((256, 256)),
+        torchvision.transforms.ToTensor(),
         normalize
     ])
 
@@ -71,7 +63,7 @@ def train(args):
 
     args.n_classes = loader.n_classes
     trainloader = data.DataLoader(loader, batch_size=args.batch_size, num_workers=8, shuffle=True, pin_memory=True)
-    val_loader = data.DataLoader(val_data, batch_size=1, num_workers=8, shuffle=False, pin_memory=True)
+    val_loader = data.DataLoader(val_data, batch_size=args.batch_size, num_workers=8, shuffle=True, pin_memory=True)
 
     print("number of images = ", len(loader))
     print("number of classes = ", args.n_classes, " architecture used = ", args.arch)
@@ -79,7 +71,7 @@ def train(args):
     if args.arch == "resnet101":
         orig_resnet = torchvision.models.resnet101(pretrained=True)
         features = list(orig_resnet.children())
-        model = nn.Sequential(*features[0:8])
+        model= nn.Sequential(*features[0:8])
         clsfier = clssimp(2048, args.n_classes)
     elif args.arch == "densenet":
         orig_densenet = torchvision.models.densenet121(pretrained=True)
@@ -87,31 +79,24 @@ def train(args):
         model = nn.Sequential(*features, nn.ReLU(inplace=True))
         clsfier = clssimp(1024, args.n_classes)
 
+    model = model.cuda()
+    clsfier = clsfier.cuda()
     if torch.cuda.device_count() > 1:
         print("Using", torch.cuda.device_count(), "GPUs")
-        model = nn.DataParallel(model).cuda()
-        clsfier = nn.DataParallel(clsfier).cuda()
-
-    if args.load == 1:
-        model.load_state_dict(torch.load(args.save_dir + args.arch + ".pth"))
-        clsfier.load_state_dict(torch.load(args.save_dir + args.arch +'clssegsimp' + ".pth"))
-        print("Model loaded!")
+        model = nn.DataParallel(model)
+        clsfier = nn.DataParallel(clsfier)
 
     optimizer = torch.optim.Adam([{'params': model.parameters(),'lr':args.l_rate/10},{'params': clsfier.parameters()}], lr=args.l_rate)
-    freeze_bn_affine = 1
-    for m in model.modules():
-        if isinstance(m, nn.BatchNorm2d):
-            m.eval()
-            if freeze_bn_affine:
-                m.weight.requires_grad = False
-                m.bias.requires_grad = False
 
-    print("Saving to " + args.save_dir + args.arch + ".pth")
+    if args.load:
+        model.load_state_dict(torch.load(args.save_dir + args.arch + ".pth"))
+        clsfier.load_state_dict(torch.load(args.save_dir + args.arch +'clsfier' + ".pth"))
+        print("Model loaded!")
+
     bceloss = nn.BCEWithLogitsLoss()
-    best_map = 0.0
+    model.train()
+    clsfier.train()
     for epoch in range(args.n_epoch):
-        model.train()
-        clsifier.train()
         for i, (images, labels) in enumerate(trainloader):
             images = Variable(images.cuda())
             labels = Variable(labels.cuda().float())
@@ -124,33 +109,33 @@ def train(args):
 
             loss.backward()
             optimizer.step()
-
+        torch.save(model.module.state_dict(), args.save_dir + args.arch + ".pth")
+        torch.save(clsfier.module.state_dict(), args.save_dir + args.arch + 'clsfier' + ".pth")
         mAP = validate.validate(args, model, clsfier, val_loader)
 
-        if mAP > best_map:
-            torch.save(model.state_dict(), args.save_dir + args.arch + ".pth")
-            torch.save(clsfier.state_dict(), args.save_dir + args.arch + 'clssegsimp' + ".pth")
-            best_map = mAP
-            print("Epoch [%d/%d][saved] Loss: %.4f mAP: %.4f" % (epoch + 1, args.n_epoch, loss.data, mAP))
-        else:
-            print("Epoch [%d/%d][----] Loss: %.4f mAP: %.4f" % (epoch + 1, args.n_epoch, loss.data, mAP))
+        print("Epoch [%d/%d] Loss: %.4f mAP: %.4f" % (epoch, args.n_epoch, loss.data, mAP))
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Hyperparams')
-    parser.add_argument('--arch', nargs='?', type=str, default='resnet101') 
-    parser.add_argument('--dataset', nargs='?', type=str, default='nus-wide',
-                        help='Dataset to use [\'pascal, coco, nus-wide\']')
-    parser.add_argument('--n_epoch', nargs='?', type=int, default=30,
+    parser.add_argument('--arch', type=str, default='densenet',
+                        help='Architecture to use densenet|resnet101')
+    parser.add_argument('--dataset', type=str, default='pascal',
+                        help='Dataset to use pascal|coco|nus-wide')
+    parser.add_argument('--n_epoch', type=int, default=50,
                         help='# of the epochs')
-    parser.add_argument('--n_classes', nargs='?', type=int, default=20)
-    parser.add_argument('--batch_size', nargs='?', type=int, default=320,
+    parser.add_argument('--n_classes', type=int, default=20,
+                        help='# of classes')
+    parser.add_argument('--batch_size', type=int, default=200,
                         help='Batch Size')
-    parser.add_argument('--l_rate', nargs='?', type=float, default=1e-4,
+    # batch_size 320 for resenet101
+    parser.add_argument('--l_rate', type=float, default=1e-4,
                         help='Learning Rate')
 
-    #save and oad
-    parser.add_argument('--load', nargs='?', type=int)
-    parser.add_argument('--save_dir', type=str, default="./savedmodels/")
-
+    #save and load
+    parser.add_argument('--load', action='store_true', help='Whether to load models')
+    parser.add_argument('--save_dir', type=str, default="./saved_models/",
+                        help='Path to save models')
+    parser.add_argument('--load_dir', type=str, default="./saved_models",
+                        help='Path to load models')
     args = parser.parse_args()
-    train(args)
+    train()

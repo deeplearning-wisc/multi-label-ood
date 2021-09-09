@@ -1,6 +1,3 @@
-import os
-import os.path
-import sys
 import torch
 import argparse
 import torchvision
@@ -8,35 +5,28 @@ import lib
 import numpy as np
 import torch.nn as nn
 from torch.autograd import Variable
-import torch.nn.functional as F
 from torch.utils import data
-import torchvision.datasets as datasets
-from utils.transform import ReLabel, ToLabel, ToSP, Scale
 from model.classifiersimple import *
-from PIL import Image
 from utils.dataloader.pascal_voc_loader import *
 from utils.dataloader.nus_wide_loader import *
 from utils.dataloader.coco_loader import *
-import random
-import torchvision.transforms as transforms
-# ---- your own transformations
-from utils.dataloader.folder import PlainDatasetFolder
 from utils import anom_utils
 
-def validate(args):
+def evaluation():
     print("In-dis data: "+args.dataset)
     print("Out-dis data: " + args.ood_data)
     torch.manual_seed(0)
+    np.random.seed(0)
     ###################### Setup Dataloader ######################
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+    normalize = torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
-    img_transform = transforms.Compose([
-        transforms.Resize((256, 256)),
-        transforms.ToTensor(),
+    img_transform = torchvision.transforms.Compose([
+        torchvision.transforms.Resize((256, 256)),
+        torchvision.transforms.ToTensor(),
         normalize,
     ])
-    label_transform = transforms.Compose([
-        ToLabel(),
+    label_transform = torchvision.transforms.Compose([
+        anom_utils.ToLabel(),
     ])
     # in_dis
     if args.dataset == 'pascal':
@@ -75,13 +65,22 @@ def validate(args):
     if args.ood_data == "imagenet":
         if args.dataset == "nus-wide":
             ood_root = "/nobackup-slow/dataset/nus-ood/"
-            out_test_data = datasets.ImageFolder(ood_root, transform=img_transform)
+            out_test_data = torchvision.datasets.ImageFolder(ood_root, transform=img_transform)
         else:
             ood_root = "/nobackup-slow/dataset/ImageNet22k/ImageNet-22K"
-            out_test_data = datasets.ImageFolder(ood_root, transform=img_transform)
+            out_test_data = torchvision.datasets.ImageFolder(ood_root, transform=img_transform)
     elif args.ood_data == "texture":
         ood_root = "/nobackup-slow/dataset/dtd/images/"
-        out_test_data = datasets.ImageFolder(ood_root, transform = img_transform)
+        out_test_data = torchvision.datasets.ImageFolder(ood_root, transform = img_transform)
+    elif args.ood_data == "MNIST":
+        gray_transform = torchvision.transforms.Compose([
+            torchvision.transforms.Resize((256, 256)),
+            torchvision.transforms.ToTensor(),
+            torchvision.transforms.Lambda(lambda x: x.repeat(3, 1, 1)),
+            normalize
+        ])
+        out_test_data = torchvision.datasets.MNIST('/nobackup-slow/dataset/MNIST/',
+                       train=False, transform=gray_transform)
 
     out_test_loader = data.DataLoader(out_test_data, batch_size=args.batch_size, num_workers=8, pin_memory=True)
 
@@ -122,7 +121,7 @@ def validate(args):
         ## Feature Extraction
         temp_x = torch.rand(2, 3, 256, 256)
         temp_x = Variable(temp_x.cuda())
-        temp_list = lib.model_feature_list(model, clsfier, temp_x)[1]
+        temp_list = lib.model_feature_list(model, clsfier, temp_x, args.arch)[1]
         num_output = len(temp_list)
         feature_list = np.empty(num_output)
         count = 0
@@ -132,12 +131,13 @@ def validate(args):
         print('get sample mean and covariance')
         sample_mean, precision = lib.sample_estimator(model, clsfier, args.n_classes,
                                                       feature_list, train_loader)
-        pack = (sample_mean, precision, num_output-1)
+        # Only use the
+        pack = (sample_mean, precision)
         print("Using noise", args.noise)
         in_scores = lib.get_Mahalanobis_score(model, clsfier, in_test_loader, pack,
-                                              args.noise, args.n_classes)
+                                              args.noise, args.n_classes, args.method)
         out_scores = lib.get_Mahalanobis_score(model, clsfier, out_test_loader, pack,
-                                               args.noise, args.n_classes)
+                                               args.noise, args.n_classes, args.method)
 
     else:
         in_scores = lib.get_logits(in_test_loader, model, clsfier, args, name="in_test")
@@ -154,34 +154,34 @@ def validate(args):
             scores = lib.get_isolationforest_scores(val_scores, in_scores, out_scores)
             in_scores = scores[:len(in_scores)]
             out_scores = scores[-len(out_scores):]
-
     ###################### Measure ######################
-    auroc, aupr, fpr = anom_utils.get_and_print_results(in_scores, out_scores,
-                                                        args.ood, args.method)
-    return auroc, aupr, fpr
+    anom_utils.get_and_print_results(in_scores, out_scores, args.ood, args.method)
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Hyperparams')
     # ood measures
     parser.add_argument('--ood', type=str, default='logit',
-                        help='which measure to use logit|odin|F|M')
+                        help='which measure to use odin|M|logit|energy|msp|prob|lof|isol')
     parser.add_argument('--method', type=str, default='max',
                         help='which method to use max|sum')
     # dataset
-    parser.add_argument('--dataset', type=str, default='pascal')
+    parser.add_argument('--dataset', type=str, default='pascal',
+                        help='Dataset to use pascal|coco|nus-wide')
     parser.add_argument('--ood_data', type=str, default='imagenet')
-    parser.add_argument('--arch', type=str, default='resnet101',
-                        help='Architecture to use')
+    parser.add_argument('--arch', type=str, default='densenet',
+                        help='Architecture to use densenet|resnet101')
     parser.add_argument('--batch_size', type=int, default=200, help='Batch Size')
     parser.add_argument('--n_classes', type=int, default=20, help='# of classes')
     # save and load
     parser.add_argument('--save_path', type=str, default="./logits/", help="save the logits")
-    parser.add_argument('--load_model', type=str, default="savedmodels/",
-                        help="load model")
+    parser.add_argument('--load_model', type=str, default="./saved_models/",
+                        help='Path to load models')
     # input pre-processing
     parser.add_argument('--T', type=int, default=1)
     parser.add_argument('--noise', type=float, default=0.0)
     args = parser.parse_args()
     args.load_model += args.dataset + '/'
+
     args.save_path += args.dataset + '/' + args.ood_data + '/' + args.arch + '/'
-    validate(args)
+    evaluation()
