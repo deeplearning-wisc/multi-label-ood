@@ -1,12 +1,19 @@
 import numpy as np
 import torch.nn as nn
 import sklearn.metrics as sk
+import sklearn.neighbors
+import sklearn.ensemble
 import time
 import torch
 from torch.autograd import Variable
 import os.path
 
 recall_level_default = 0.95
+
+class ToLabel(object):
+     def __call__(self, inputs):
+        return (torch.from_numpy(np.array(inputs)).long())
+
 
 def stable_cumsum(arr, rtol=1e-05, atol=1e-08):
     """Use high precision for cumsum and check that final value matches sum
@@ -65,7 +72,10 @@ def fpr_and_fdr_at_recall(y_true, y_score, recall_level=recall_level_default, po
     recall, fps, tps, thresholds = np.r_[recall[sl], 1], np.r_[fps[sl], 0], np.r_[tps[sl], 0], thresholds[sl]
 
     cutoff = np.argmin(np.abs(recall - recall_level))
-    return fps[cutoff] / (np.sum(np.logical_not(y_true)))   # , fps[cutoff]/(fps[cutoff] + tps[cutoff])
+    if np.array_equal(classes, [1]):
+        return thresholds[cutoff]  # return threshold
+
+    return fps[cutoff] / (np.sum(np.logical_not(y_true))), thresholds[cutoff]
 
 def get_measures(_pos, _neg, recall_level=recall_level_default):
     pos = np.array(_pos[:]).reshape((-1, 1))
@@ -80,7 +90,6 @@ def get_measures(_pos, _neg, recall_level=recall_level_default):
 
     return auroc, aupr, fpr, threshould
 
-
 def print_measures(auroc, aupr, fpr, ood, method, recall_level=recall_level_default):
     print('\t\t\t' + ood+'_'+method)
     print('FPR{:d}:\t\t\t{:.2f}'.format(int(100 * recall_level), 100 * fpr))
@@ -88,11 +97,39 @@ def print_measures(auroc, aupr, fpr, ood, method, recall_level=recall_level_defa
     print('AUPR:  \t\t\t{:.2f}'.format(100 * aupr))
 
 def get_and_print_results(out_score, in_score, ood, method):
-
     aurocs, auprs, fprs = [], [], []
     measures = get_measures(out_score, in_score)
     aurocs.append(measures[0]); auprs.append(measures[1]); fprs.append(measures[2])
 
     auroc = np.mean(aurocs); aupr = np.mean(auprs); fpr = np.mean(fprs)
+
     print_measures(auroc, aupr, fpr, ood, method)
     return auroc, aupr, fpr
+
+def get_localoutlierfactor_scores(val, test, out_scores):
+    scorer = sklearn.neighbors.LocalOutlierFactor(novelty=True)
+    print("fitting validation set")
+    start = time.time()
+    scorer.fit(val)
+    end = time.time()
+    print("fitting took ", end - start)
+    val = np.asarray(val)
+    test = np.asarray(test)
+    out_scores = np.asarray(out_scores)
+    print(val.shape, test.shape, out_scores.shape)
+    return scorer.score_samples(np.vstack((test, out_scores)))
+
+
+def get_isolationforest_scores(val, test, out_scores):
+    scorer = sklearn.ensemble.IsolationForest()
+    print("fitting validation set")
+    start = time.time()
+    scorer.fit(val)
+    end = time.time()
+    print("fitting took ", end - start)
+    val = np.asarray(val)
+    test = np.asarray(test)
+    out_scores = np.asarray(out_scores)
+    print(val.shape, test.shape, out_scores.shape)
+    return scorer.score_samples(np.vstack((test, out_scores)))
+
