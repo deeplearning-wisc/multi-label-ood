@@ -1,7 +1,14 @@
 # Can multi-label classification networks know what they don’t know?
 
 This is a [PyTorch](http://pytorch.org) implementation of [Can multi-label classification networks know what they don't know?](......) by Haoran Wang, Weitang Liu, Alex Bocchieri, Sharon Li. 
+Code is modified from
+[multilabel-ood](https://github.com/xksteven/multilabel-ood),
+[ODIN](https://github.com/facebookresearch/odin),
+[Outlier Exposure](https://github.com/hendrycks/outlier-exposure), and
+[deep Mahalanobis
+detector](https://github.com/pokaxpoka/deep_Mahalanobis_detector)
 
+![teaser](demo_figs/teaser.png)
 ## Datasets
 
 ### In-distribution dataset
@@ -77,4 +84,9 @@ python3 eval.py --arch densenet --dataset coco --ood_data imagenet --ood odin/M
 --method max --T best_T --noise --best_noise
 ```
 
+## OOD Detection Result
+OOD detection performance comparison using JointEnergy vs. competitive
+baselines.
+![result](demo_figs/result_screenshot.png)
 
+## Citation
