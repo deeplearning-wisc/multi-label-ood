@@ -1,4 +1,4 @@
-# Can multi-label classification networks know what they don’t know?
+# Can multi-label classification networks know what they don’t know? 
 
 This is a [PyTorch](http://pytorch.org) implementation of [Can multi-label classification networks know what they don't know?](......) by Haoran Wang, Weitang Liu, Alex Bocchieri, Sharon Li. 
 Code is modified from
