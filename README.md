@@ -92,7 +92,7 @@ baselines.
 ## Citation
      @article{wang2021canmulti,
           title={Can multi-label classification networks know what they don't know?},
-          author={Wang, Haoran and Liu, Weitang and Bocchieri, Alex and Li Li, Yixuan},
+          author={Wang, Haoran and Liu, Weitang and Bocchieri, Alex and Li, Yixuan},
           journal={Advances in Neural Information Processing Systems},
           year={2021}
      } 
